@@ -136,6 +136,34 @@ public final class CandleBook {
         for (Candle c : m1.values()) b.merge(c);
     }
 
+    /**
+     * Rebuild higher-timeframe forming candles from complete M1 history plus the forming M1 candle.
+     * Called after history arrives, so candles that began forming before history was loaded are repaired.
+     */
+    public void reseedForming() {
+        lock.writeLock().lock();
+        try {
+            CandleBuilder m1Forming = forming.get(Timeframe.M1);
+            for (Timeframe tf : Timeframe.values()) {
+                if (tf == Timeframe.M1) continue;
+                CandleBuilder old = forming.get(tf);
+                if (old == null || m1Forming == null) continue;
+                CandleBuilder b = new CandleBuilder(tf, old.openTime, old.build(false).source());
+                Map.Entry<Long, Candle> firstM1 = complete.get(Timeframe.M1).firstEntry();
+                if (firstM1 == null || firstM1.getKey() > b.openTime) b.markQuality(DataQuality.PARTIAL);
+                for (Candle c : complete.get(Timeframe.M1).subMap(b.openTime, true, m1Forming.openTime, false).values()) {
+                    b.merge(c);
+                }
+                Candle fm = m1Forming.build(false);
+                b.merge(fm);
+                forming.put(tf, b);
+            }
+            version++;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
     /** Close forming candles whose period has elapsed (with a grace delay for late ticks). */
     public List<Closed> closeByClock(long nowMs, long graceMs) {
         List<Closed> closed = new ArrayList<>();

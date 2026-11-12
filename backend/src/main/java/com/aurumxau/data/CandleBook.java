@@ -34,7 +34,15 @@ public final class CandleBook {
     private long lateTicks;
     private volatile long version;
 
+    private final boolean unbounded;
+
     public CandleBook() {
+        this(false);
+    }
+
+    /** @param unbounded keep every candle (backtests); live books trim to a fixed window per timeframe */
+    public CandleBook(boolean unbounded) {
+        this.unbounded = unbounded;
         for (Timeframe tf : Timeframe.values()) complete.put(tf, new TreeMap<>());
     }
 
@@ -191,6 +199,7 @@ public final class CandleBook {
     }
 
     private void trim(Timeframe tf) {
+        if (unbounded) return;
         TreeMap<Long, Candle> m = complete.get(tf);
         int max = RETAIN.get(tf);
         while (m.size() > max) m.pollFirstEntry();
@@ -222,8 +231,13 @@ public final class CandleBook {
         lock.readLock().lock();
         try {
             NavigableMap<Long, Candle> head = complete.get(tf).headMap(asOfMs - tf.millis, true);
-            List<Candle> out = new ArrayList<>(head.values());
-            return out.size() > limit ? out.subList(out.size() - limit, out.size()) : out;
+            ArrayList<Candle> out = new ArrayList<>(Math.min(limit, 512));
+            for (Candle c : head.descendingMap().values()) {
+                if (out.size() >= limit) break;
+                out.add(c);
+            }
+            Collections.reverse(out);
+            return out;
         } finally {
             lock.readLock().unlock();
         }

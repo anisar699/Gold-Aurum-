@@ -114,11 +114,13 @@ public final class SignalLifecycle {
             double px = d == Direction.LONG ? Math.min(bid, stop) - x.slippage() : Math.max(ask, stop) + x.slippage();
             double r = legR(px);
             realizedR += r * remaining;
-            String to = tp1Done ? "TP1" : "SL";
-            Text why = tp1Done
+            boolean beStop = tp1Done && x.moveStopToBreakeven();
+            String to = beStop ? "TP1" : "SL";
+            Text why = beStop
                     ? Text.of("BE", "Remaining position closed at the breakeven stop after TP1", "TP1 ke baad baqi position breakeven stop par band")
+                    : tp1Done ? Text.of("SL_AFTER_TP1", "Stop loss hit on the remaining position after TP1", "TP1 ke baad baqi position par stop loss lag gaya")
                     : Text.of("SL", "Stop loss hit", "Stop loss lag gaya");
-            out.add(event(timeMs, to, "CLOSED", bid, ask, Prices.round(px, 3), Prices.r3(realizedR), remaining, why));
+            out.add(event(timeMs, to, "CLOSED", bid, ask, Prices.round(px, 3), realizedR, remaining, why));
             remaining = 0;
             return out;
         }
@@ -127,7 +129,7 @@ public final class SignalLifecycle {
             double r = legR(sig.tp1());
             if (w >= 0.999) {
                 realizedR += r;
-                out.add(event(timeMs, "TP1", "CLOSED", bid, ask, sig.tp1(), Prices.r3(realizedR), 1.0,
+                out.add(event(timeMs, "TP1", "CLOSED", bid, ask, sig.tp1(), realizedR, 1.0,
                         Text.of("TP1_FULL", "TP1 reached, full position closed", "TP1 hasil, poori position band")));
                 remaining = 0;
                 return out;
@@ -136,13 +138,13 @@ public final class SignalLifecycle {
             realizedR += r * w;
             remaining -= w;
             if (x.moveStopToBreakeven()) stop = fill;
-            out.add(event(timeMs, "TP1_PARTIAL", "TP1_HIT", bid, ask, sig.tp1(), Prices.r3(r), w,
+            out.add(event(timeMs, "TP1_PARTIAL", "TP1_HIT", bid, ask, sig.tp1(), r, w,
                     Text.of("TP1", "TP1 reached: " + Math.round(w * 100) + "% closed" + (x.moveStopToBreakeven() ? ", stop moved to breakeven" : ""),
                             "TP1 hasil: " + Math.round(w * 100) + "% band" + (x.moveStopToBreakeven() ? ", stop breakeven par" : ""))));
         }
         if ((exitPx - sig.tp2()) * sg >= 0) {
             realizedR += legR(sig.tp2()) * remaining;
-            out.add(event(timeMs, "TP2", "CLOSED", bid, ask, sig.tp2(), Prices.r3(realizedR), remaining,
+            out.add(event(timeMs, "TP2", "CLOSED", bid, ask, sig.tp2(), realizedR, remaining,
                     Text.of("TP2", "TP2 reached", "TP2 hasil")));
             remaining = 0;
             return out;
@@ -151,7 +153,7 @@ public final class SignalLifecycle {
             double px = exitPx - sg * x.slippage();
             realizedR += legR(px) * remaining;
             String to = tp1Done ? "TP1" : "TIMEOUT";
-            out.add(event(timeMs, to, "CLOSED", bid, ask, Prices.round(px, 3), Prices.r3(realizedR), remaining,
+            out.add(event(timeMs, to, "CLOSED", bid, ask, Prices.round(px, 3), realizedR, remaining,
                     Text.of("TIMEOUT", "Maximum holding time (" + sig.maxHoldMinutes() + " min) reached: closed at market",
                             "Zyada se zyada " + sig.maxHoldMinutes() + " minute poore: market par band")));
             remaining = 0;

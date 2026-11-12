@@ -1,0 +1,304 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<style>
+  html, body { margin: 0; padding: 0; background: #0B0B0D; height: 100%; overflow: hidden; font-family: -apple-system, Roboto, sans-serif; }
+  #chart { position: absolute; inset: 0; }
+  #legend { position: absolute; left: 8px; top: 6px; z-index: 5; color: #D9D9D9; font-size: 11px; line-height: 15px; pointer-events: none;
+            background: rgba(11,11,13,0.65); padding: 2px 6px; border-radius: 4px; }
+  #legend b { color: #D4AF37; }
+  #status { position: absolute; right: 8px; top: 6px; z-index: 5; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+            color: #0B0B0D; background: #888; pointer-events: none; }
+  #attr { position: absolute; left: 8px; bottom: 4px; z-index: 5; font-size: 9px; color: #666; }
+  #attr a { color: #777; }
+</style>
+</head>
+<body>
+<div id="chart"></div>
+<div id="legend"></div>
+<div id="status"></div>
+<div id="attr">Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts</a></div>
+<script>/*__LWC__*/</script>
+<script>
+(function () {
+  'use strict';
+  var LWC = window.LightweightCharts;
+  var post = function (m) {
+    var s = JSON.stringify(m);
+    if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(s);
+    else if (window.parent && window.parent !== window) window.parent.postMessage(s, '*');
+  };
+  var COLORS = {
+    up: '#26A69A', down: '#EF5350', gold: '#D4AF37', text: '#B8B8B8', grid: '#1C1C20',
+    ema20: '#F5D76E', ema50: '#4FC3F7', ema200: '#BA68C8', vwap: '#FF8A65',
+    support: 'rgba(38,166,154,0.13)', resistance: 'rgba(239,83,80,0.13)',
+    obBull: 'rgba(38,166,154,0.22)', obBear: 'rgba(239,83,80,0.22)',
+    fvgBull: 'rgba(79,195,247,0.16)', fvgBear: 'rgba(186,104,200,0.16)', entry: 'rgba(212,175,55,0.22)'
+  };
+  var state = { tz: 'PKT', precision: 2, rows: [], ind: {}, overlays: null, toggles: {}, quote: null, status: '', times: [] };
+  var chart, candles, volume, lines = {}, osc = {}, markersApi = null, priceLines = [], boxes;
+
+  function offsetSec() { return state.tz === 'PKT' ? 5 * 3600 : 0; }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function fmtTime(sec, withDate) {
+    var d = new Date((sec + offsetSec()) * 1000);
+    var t = pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes());
+    return withDate ? pad(d.getUTCDate()) + '/' + pad(d.getUTCMonth() + 1) + ' ' + t : t;
+  }
+  function fmtPrice(p) { return (p == null || isNaN(p)) ? '-' : Number(p).toFixed(state.precision); }
+
+  // ---- custom primitive drawing price boxes (zones, order blocks, FVGs, entry zone) ----
+  function BoxPrimitive() { this.items = []; this.chart = null; this.series = null; this.req = null; }
+  BoxPrimitive.prototype.attached = function (p) { this.chart = p.chart; this.series = p.series; this.req = p.requestUpdate; };
+  BoxPrimitive.prototype.detached = function () { this.chart = null; this.series = null; };
+  BoxPrimitive.prototype.set = function (items) { this.items = items || []; if (this.req) this.req(); };
+  BoxPrimitive.prototype.updateAllViews = function () {};
+  BoxPrimitive.prototype.paneViews = function () {
+    var self = this;
+    return [{
+      zOrder: function () { return 'bottom'; },
+      renderer: function () {
+        return {
+          draw: function (target) {
+            if (!self.chart || !self.series || !state.times.length) return;
+            target.useMediaCoordinateSpace(function (scope) {
+              var ctx = scope.context, w = scope.mediaSize.width, ts = self.chart.timeScale();
+              for (var i = 0; i < self.items.length; i++) {
+                var b = self.items[i];
+                var y1 = self.series.priceToCoordinate(b.top), y2 = self.series.priceToCoordinate(b.bottom);
+                if (y1 == null || y2 == null) continue;
+                var x1 = 0;
+                if (b.from != null) {
+                  var t = snapTime(b.from);
+                  if (t === -1) continue;
+                  if (t !== null) { var c = ts.timeToCoordinate(t); x1 = c == null ? 0 : Math.max(0, c); }
+                }
+                var top = Math.min(y1, y2), h = Math.max(1, Math.abs(y2 - y1));
+                ctx.fillStyle = b.fill; ctx.fillRect(x1, top, w - x1, h);
+                if (b.label) { ctx.fillStyle = b.labelColor || '#999'; ctx.font = '9px sans-serif'; ctx.fillText(b.label, x1 + 3, top + 10); }
+              }
+            });
+          }
+        };
+      }
+    }];
+  };
+  // first candle time >= sec; null = before data (draw from left edge); -1 = after data (skip)
+  function snapTime(sec) {
+    var a = state.times;
+    if (sec <= a[0]) return null;
+    if (sec > a[a.length - 1]) return -1;
+    var lo = 0, hi = a.length - 1;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (a[mid] < sec) lo = mid + 1; else hi = mid; }
+    return a[lo];
+  }
+
+  function create() {
+    chart = LWC.createChart(document.getElementById('chart'), {
+      autoSize: true,
+      layout: { background: { color: '#0B0B0D' }, textColor: COLORS.text, fontSize: 11, attributionLogo: false,
+        panes: { separatorColor: '#2A2A30', enableResize: true } },
+      grid: { vertLines: { color: COLORS.grid }, horzLines: { color: COLORS.grid } },
+      crosshair: { mode: LWC.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#2A2A30' },
+      timeScale: { borderColor: '#2A2A30', timeVisible: true, secondsVisible: false, rightOffset: 6,
+        tickMarkFormatter: function (t, type) { return type <= 2 ? fmtTime(t, true).split(' ')[0] : fmtTime(t, false); } },
+      localization: { timeFormatter: function (t) { return fmtTime(t, true) + ' ' + state.tz; },
+        priceFormatter: function (p) { return fmtPrice(p); } },
+      handleScale: { axisPressedMouseMove: true, pinch: true, mouseWheel: true },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false }
+    });
+    candles = chart.addSeries(LWC.CandlestickSeries, { upColor: COLORS.up, downColor: COLORS.down, wickUpColor: COLORS.up,
+      wickDownColor: COLORS.down, borderVisible: false, priceFormat: { type: 'price', precision: 2, minMove: 0.01 } });
+    boxes = new BoxPrimitive();
+    candles.attachPrimitive(boxes);
+    markersApi = LWC.createSeriesMarkers(candles, []);
+    chart.subscribeCrosshairMove(function (param) {
+      var d = param && param.time ? param.seriesData.get(candles) : null;
+      legend(d, param && param.time);
+    });
+    post({ type: 'ready' });
+  }
+
+  function legend(d, time) {
+    var el = document.getElementById('legend');
+    var r = state.rows;
+    if (!d && r.length) { var last = r[r.length - 1]; d = { open: last[1], high: last[2], low: last[3], close: last[4] }; time = last[0] / 1000; }
+    if (!d) { el.innerHTML = ''; return; }
+    el.innerHTML = '<b>XAU/USD ' + (state.tf || '') + '</b> ' + fmtTime(time, true) + ' ' + state.tz +
+      '<br>O ' + fmtPrice(d.open) + ' H ' + fmtPrice(d.high) + ' L ' + fmtPrice(d.low) + ' C ' + fmtPrice(d.close) + ' (bid)';
+  }
+
+  function on(k) { return state.toggles[k] !== false; }
+  function lineSeries(color, pane, width) {
+    return chart.addSeries(LWC.LineSeries, { color: color, lineWidth: width || 1, priceLineVisible: false,
+      lastValueVisible: false, crosshairMarkerVisible: false }, pane);
+  }
+  function seriesData(arr) {
+    var out = [];
+    if (!arr) return out;
+    for (var i = 0; i < state.rows.length && i < arr.length; i++) {
+      if (arr[i] !== null && arr[i] !== undefined) out.push({ time: state.rows[i][0] / 1000, value: arr[i] });
+    }
+    return out;
+  }
+
+  function rebuildIndicators() {
+    var range = chart.timeScale().getVisibleLogicalRange();
+    Object.keys(lines).forEach(function (k) { chart.removeSeries(lines[k]); }); lines = {};
+    Object.keys(osc).forEach(function (k) { chart.removeSeries(osc[k]); }); osc = {};
+    if (volume) { chart.removeSeries(volume); volume = null; }
+    var ind = state.ind || {};
+    if (on('ema20')) { lines.ema20 = lineSeries(COLORS.ema20, 0); lines.ema20.setData(seriesData(ind.ema20)); }
+    if (on('ema50')) { lines.ema50 = lineSeries(COLORS.ema50, 0); lines.ema50.setData(seriesData(ind.ema50)); }
+    if (on('ema200')) { lines.ema200 = lineSeries(COLORS.ema200, 0, 2); lines.ema200.setData(seriesData(ind.ema200)); }
+    if (on('vwap') && ind.vwap) { lines.vwap = lineSeries(COLORS.vwap, 0); lines.vwap.setData(seriesData(ind.vwap)); }
+    if (on('volume') && state.volumeAvailable) {
+      volume = chart.addSeries(LWC.HistogramSeries, { priceScaleId: 'vol', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false }, 0);
+      volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      volume.setData(state.rows.map(function (r) { return { time: r[0] / 1000, value: r[9], color: r[4] >= r[1] ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)' }; }));
+    }
+    var pane = 1;
+    if (on('rsi')) {
+      osc.rsi = lineSeries('#F5D76E', pane, 1); osc.rsi.setData(seriesData(ind.rsi14));
+      osc.rsi.createPriceLine({ price: 70, color: '#555', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
+      osc.rsi.createPriceLine({ price: 30, color: '#555', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
+      pane++;
+    }
+    if (on('macd')) {
+      osc.hist = chart.addSeries(LWC.HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, pane);
+      var h = [];
+      (ind.macdHist || []).forEach(function (v, i) { if (v !== null && i < state.rows.length) h.push({ time: state.rows[i][0] / 1000, value: v, color: v >= 0 ? 'rgba(38,166,154,0.7)' : 'rgba(239,83,80,0.7)' }); });
+      osc.hist.setData(h);
+      osc.macd = lineSeries('#4FC3F7', pane); osc.macd.setData(seriesData(ind.macd));
+      osc.sig = lineSeries('#FF8A65', pane); osc.sig.setData(seriesData(ind.macdSignal));
+      pane++;
+    }
+    if (on('atr')) { osc.atr = lineSeries('#BA68C8', pane); osc.atr.setData(seriesData(ind.atr14)); pane++; }
+    var panes = chart.panes();
+    for (var i = 1; i < panes.length; i++) panes[i].setStretchFactor(0.35);
+    if (panes[0]) panes[0].setStretchFactor(1);
+    if (range) chart.timeScale().setVisibleLogicalRange(range);
+  }
+
+  function applyOverlays() {
+    priceLines.forEach(function (p) { try { candles.removePriceLine(p); } catch (e) {} });
+    priceLines = [];
+    var o = state.overlays, items = [], marks = [];
+    var pl = function (price, color, title, style, width) {
+      if (price == null || isNaN(price)) return;
+      priceLines.push(candles.createPriceLine({ price: price, color: color, lineWidth: width || 1, lineStyle: style == null ? 2 : style,
+        axisLabelVisible: true, title: title }));
+    };
+    if (o) {
+      if (on('zones')) (o.zones || []).slice(0, 6).forEach(function (z) {
+        items.push({ top: z.high, bottom: z.low, from: null, fill: z.type === 'SUPPORT' ? COLORS.support : COLORS.resistance,
+          label: (z.type === 'SUPPORT' ? 'S ' : 'R ') + z.sourceTf + ' ' + Math.round(z.strength), labelColor: '#9a9a9a' });
+      });
+      if (on('ob')) (o.orderBlocks || []).forEach(function (b) {
+        items.push({ top: b.high, bottom: b.low, from: b.timeMs / 1000, fill: b.direction === 'LONG' ? COLORS.obBull : COLORS.obBear,
+          label: 'OB ' + (b.status === 'FRESH' ? 'fresh' : 'mitig.'), labelColor: '#cfcfcf' });
+      });
+      if (on('fvg')) (o.fvgs || []).forEach(function (f) {
+        items.push({ top: f.high, bottom: f.low, from: f.timeMs / 1000, fill: f.direction === 'LONG' ? COLORS.fvgBull : COLORS.fvgBear,
+          label: 'FVG', labelColor: '#a8c8d8' });
+      });
+      if (on('structure')) (o.structure || []).concat(o.internalStructure || []).forEach(function (e) {
+        var up = e.direction === 'LONG', internal = e.scope === 'INTERNAL';
+        marks.push({ time: e.timeMs / 1000, position: up ? 'belowBar' : 'aboveBar', color: up ? COLORS.up : COLORS.down,
+          shape: up ? 'arrowUp' : 'arrowDown', text: (e.type === 'CHOCH' ? 'CHoCH' : 'BOS') + (internal ? 'i' : ''), size: internal ? 0.6 : 1 });
+      });
+      if (on('liquidity')) {
+        (o.liquidityPools || []).slice(-6).forEach(function (p) { pl(p.price, '#9E9E9E', p.kind === 'EQUAL_HIGHS' ? 'EQH' : 'EQL', 1); });
+        (o.sweeps || []).forEach(function (s) {
+          marks.push({ time: s.timeMs / 1000, position: s.impliedDirection === 'LONG' ? 'belowBar' : 'aboveBar', color: COLORS.gold,
+            shape: 'circle', text: 'SWP', size: 0.6 });
+        });
+      }
+      if (on('keyLevels')) (o.keyLevels || []).forEach(function (k) {
+        if (/^(PDH|PDL|PWH|PWL)$/.test(k.name) || (on('sessions') && /_(HIGH|LOW)$/.test(k.name))) {
+          pl(k.price, /^P/.test(k.name) ? COLORS.gold : '#6D6D6D', k.name.replace('NEW_YORK', 'NY').replace('_HIGH', ' H').replace('_LOW', ' L'), 3);
+        }
+      });
+      if (on('signal') && o.signal && o.signal.signal) {
+        var s = o.signal.signal;
+        items.push({ top: s.entryHigh, bottom: s.entryLow, from: s.createdAtMs / 1000, fill: COLORS.entry, label: 'ENTRY ' + o.signal.state, labelColor: COLORS.gold });
+        pl(s.stopLoss, COLORS.down, 'SL', 0, 2);
+        pl(s.tp1, COLORS.up, 'TP1', 0, 1);
+        pl(s.tp2, COLORS.up, 'TP2', 0, 2);
+      }
+    }
+    if (on('bidask') && state.quote) {
+      pl(state.quote.bid, '#E0E0E0', 'BID', 1);
+      pl(state.quote.ask, '#8D8D8D', 'ASK', 1);
+    }
+    var times = {};
+    state.times.forEach(function (t) { times[t] = true; });
+    marks = marks.filter(function (m) { return times[m.time]; }).sort(function (a, b) { return a.time - b.time; });
+    markersApi.setMarkers(marks);
+    boxes.set(items);
+  }
+
+  function setData(m) {
+    state.tf = m.tf;
+    state.precision = m.precision || 2;
+    state.rows = m.rows || [];
+    state.ind = m.indicators || {};
+    state.volumeAvailable = !!m.volumeAvailable;
+    state.times = state.rows.map(function (r) { return r[0] / 1000; });
+    var minMove = Math.pow(10, -state.precision);
+    candles.applyOptions({ priceFormat: { type: 'price', precision: state.precision, minMove: minMove } });
+    candles.setData(state.rows.map(function (r) { return { time: r[0] / 1000, open: r[1], high: r[2], low: r[3], close: r[4] }; }));
+    rebuildIndicators();
+    applyOverlays();
+    legend(null);
+    if (m.fit) chart.timeScale().fitContent();
+  }
+
+  var TF_SEC = { M1: 60, M3: 180, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 };
+  // Live forming candle from bid quotes (completed candles always come from the backend).
+  function updateForming(bid, timeMs) {
+    if (bid == null || !timeMs || !state.rows.length || !TF_SEC[state.tf]) return;
+    var sec = TF_SEC[state.tf], bucket = Math.floor(timeMs / 1000 / sec) * sec;
+    var last = state.rows[state.rows.length - 1], lastT = last[0] / 1000;
+    if (bucket < lastT) return;
+    if (bucket === lastT) {
+      last[2] = Math.max(last[2], bid); last[3] = Math.min(last[3], bid); last[4] = bid;
+    } else {
+      last = [bucket * 1000, bid, bid, bid, bid, bid, bid, bid, bid, 0, false, 'FORMING'];
+      state.rows.push(last); state.times.push(bucket);
+    }
+    candles.update({ time: last[0] / 1000, open: last[1], high: last[2], low: last[3], close: last[4] });
+    legend(null);
+  }
+
+  function setStatus(s) {
+    var el = document.getElementById('status');
+    el.textContent = s || '';
+    el.style.display = s ? 'block' : 'none';
+    el.style.background = s === 'LIVE' ? '#26A69A' : (s === 'DEMO_DATA' ? '#D4AF37' : '#EF5350');
+  }
+
+  window.__recv = function (raw) {
+    try {
+      var m = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      switch (m.type) {
+        case 'init': state.tz = m.tz || 'PKT'; state.toggles = m.toggles || {}; break;
+        case 'data': setData(m); break;
+        case 'overlays': state.overlays = m.data; applyOverlays(); break;
+        case 'toggles': state.toggles = m.toggles || {}; rebuildIndicators(); applyOverlays(); break;
+        case 'quote': state.quote = { bid: m.bid, ask: m.ask }; updateForming(m.bid, m.timeMs); if (on('bidask')) applyOverlays(); break;
+        case 'status': setStatus(m.status); break;
+        case 'tz': state.tz = m.tz; chart.applyOptions({}); legend(null); break;
+        case 'fit': chart.timeScale().fitContent(); break;
+      }
+    } catch (e) { post({ type: 'error', message: String(e && e.message || e) }); }
+  };
+  window.addEventListener('message', function (e) { if (typeof e.data === 'string' && e.data.charAt(0) === '{') window.__recv(e.data); });
+  try { create(); } catch (e) { post({ type: 'error', message: 'chart init failed: ' + e.message }); }
+})();
+</script>
+</body>
+</html>

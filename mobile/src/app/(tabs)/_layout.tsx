@@ -20,7 +20,7 @@ export default function TabLayout() {
         header: () => <Header />,
         tabBarActiveTintColor: C.gold,
         tabBarInactiveTintColor: C.muted,
-        tabBarStyle: { backgroundColor: '#0E0E11', borderTopColor: C.border, height: 62, paddingBottom: 8, paddingTop: 6 },
+        tabBarStyle: { backgroundColor: '#0E0E11', borderTopColor: C.border, height: 70, paddingBottom: 10, paddingTop: 6 },
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
         sceneStyle: { backgroundColor: C.bg },
       }}>

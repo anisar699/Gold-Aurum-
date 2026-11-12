@@ -34,7 +34,7 @@ function ZoneCard({ title, z, p, lang, testID }: { title: string; z: Zone | null
       <Title right={<Badge text={`${t('strength', lang)} ${Math.round(z.strength)}`} color={C.gold} />}>{title}</Title>
       <Text style={{ color, fontSize: 20, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatPrice(z.low, p)} – {formatPrice(z.high, p)}</Text>
       <Row label={t('sourceTf', lang)} value={z.sourceTf} />
-      <Row label={t('distance', lang)} value={formatPrice(z.distance, p)} mono />
+      <Row label={t('distance', lang)} value={z.distance === 0 ? (lang === 'ur' ? 'Price zone ke andar' : 'Price inside zone') : formatPrice(z.distance, p)} mono />
       <Row label={t('lastTested', lang)} value={`${formatDateTime(z.lastTouchMs, tz)} (${formatAge(now - z.lastTouchMs)})`} />
       {z.reasons.map((r, i) => <Bullet key={i}>{tx(r, lang)}</Bullet>)}
     </Card>

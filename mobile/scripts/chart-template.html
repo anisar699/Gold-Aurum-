@@ -64,7 +64,7 @@
           draw: function (target) {
             if (!self.chart || !self.series || !state.times.length) return;
             target.useMediaCoordinateSpace(function (scope) {
-              var ctx = scope.context, w = scope.mediaSize.width, ts = self.chart.timeScale();
+              var ctx = scope.context, w = scope.mediaSize.width, ts = self.chart.timeScale(), labels = [];
               for (var i = 0; i < self.items.length; i++) {
                 var b = self.items[i];
                 var y1 = self.series.priceToCoordinate(b.top), y2 = self.series.priceToCoordinate(b.bottom);
@@ -77,7 +77,11 @@
                 }
                 var top = Math.min(y1, y2), h = Math.max(1, Math.abs(y2 - y1));
                 ctx.fillStyle = b.fill; ctx.fillRect(x1, top, w - x1, h);
-                if (b.label) { ctx.fillStyle = b.labelColor || '#999'; ctx.font = '9px sans-serif'; ctx.fillText(b.label, x1 + 3, top + 10); }
+                if (b.label) {
+                  var ly = top + 10, clash = false;
+                  for (var j = 0; j < labels.length; j++) if (Math.abs(labels[j] - ly) < 12) clash = true;
+                  if (!clash) { labels.push(ly); ctx.fillStyle = b.labelColor || '#999'; ctx.font = '9px sans-serif'; ctx.fillText(b.label, x1 + 3, ly); }
+                }
               }
             });
           }
@@ -193,26 +197,27 @@
         axisLabelVisible: true, title: title }));
     };
     if (o) {
-      if (on('zones')) (o.zones || []).slice(0, 6).forEach(function (z) {
+      if (on('zones')) (o.zones || []).slice(0, 4).forEach(function (z) {
         items.push({ top: z.high, bottom: z.low, from: null, fill: z.type === 'SUPPORT' ? COLORS.support : COLORS.resistance,
           label: (z.type === 'SUPPORT' ? 'S ' : 'R ') + z.sourceTf + ' ' + Math.round(z.strength), labelColor: '#9a9a9a' });
       });
-      if (on('ob')) (o.orderBlocks || []).forEach(function (b) {
+      if (on('ob')) (o.orderBlocks || []).slice(-4).forEach(function (b) {
         items.push({ top: b.high, bottom: b.low, from: b.timeMs / 1000, fill: b.direction === 'LONG' ? COLORS.obBull : COLORS.obBear,
           label: 'OB ' + (b.status === 'FRESH' ? 'fresh' : 'mitig.'), labelColor: '#cfcfcf' });
       });
-      if (on('fvg')) (o.fvgs || []).forEach(function (f) {
+      if (on('fvg')) (o.fvgs || []).slice(-4).forEach(function (f) {
         items.push({ top: f.high, bottom: f.low, from: f.timeMs / 1000, fill: f.direction === 'LONG' ? COLORS.fvgBull : COLORS.fvgBear,
           label: 'FVG', labelColor: '#a8c8d8' });
       });
-      if (on('structure')) (o.structure || []).concat(o.internalStructure || []).forEach(function (e) {
+      // Declutter: last 5 external structure breaks, last 2 internal ones.
+      if (on('structure')) (o.structure || []).slice(-5).concat((o.internalStructure || []).slice(-2)).forEach(function (e) {
         var up = e.direction === 'LONG', internal = e.scope === 'INTERNAL';
         marks.push({ time: e.timeMs / 1000, position: up ? 'belowBar' : 'aboveBar', color: up ? COLORS.up : COLORS.down,
           shape: up ? 'arrowUp' : 'arrowDown', text: (e.type === 'CHOCH' ? 'CHoCH' : 'BOS') + (internal ? 'i' : ''), size: internal ? 0.6 : 1 });
       });
       if (on('liquidity')) {
-        (o.liquidityPools || []).slice(-6).forEach(function (p) { pl(p.price, '#9E9E9E', p.kind === 'EQUAL_HIGHS' ? 'EQH' : 'EQL', 1); });
-        (o.sweeps || []).forEach(function (s) {
+        (o.liquidityPools || []).slice(-4).forEach(function (p) { pl(p.price, '#9E9E9E', p.kind === 'EQUAL_HIGHS' ? 'EQH' : 'EQL', 1); });
+        (o.sweeps || []).slice(-3).forEach(function (s) {
           marks.push({ time: s.timeMs / 1000, position: s.impliedDirection === 'LONG' ? 'belowBar' : 'aboveBar', color: COLORS.gold,
             shape: 'circle', text: 'SWP', size: 0.6 });
         });

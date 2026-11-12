@@ -103,12 +103,13 @@ public final class Zones {
 
         double ageHours = Math.max(0, (now - lastTouch) / 3_600_000.0);
         double recency = Math.exp(-ageHours / 120.0);
-        double strength = Math.min(cl.size(), 5) / 5.0 * 30
-                + Math.min(avgReaction / 2.0, 1.0) * 25
+        // Component ranges are wide enough that only exceptional zones approach 100.
+        double strength = Math.min(cl.size(), 8) / 8.0 * 25
+                + Math.min(avgReaction / 3.0, 1.0) * 25
                 + maxWeight / 3.0 * 20
                 + (roleReversal || flipped ? 10 : 0)
                 + recency * 10
-                + Math.min(rejections, 5);
+                + Math.min(rejections, 10) / 10.0 * 10;
         strength = Math.min(100, strength);
         double distance = lo > ref ? lo - ref : hi < ref ? ref - hi : 0;
         double relevance = strength * Math.exp(-distance / (3.0 * atrH1));

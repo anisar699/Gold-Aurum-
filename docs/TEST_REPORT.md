@@ -13,11 +13,13 @@ environment (reason given) · **NOT TESTED** = not executed.
 |---|---|
 | Backend JUnit (unit + integration, `mvn test`) | **63 / 63 PASS** |
 | Backend build with official JForex SDK (`mvn -Pjforex package`) | **PASS** (compiles against DDS2-jClient-JForex 3.6.51) |
-| Mobile TypeScript check (`tsc --noEmit`) | **PASS** |
+| Mobile TypeScript check (`tsc --noEmit`) | **PASS** (after fix: TypeScript 6 needs `"types": ["jest"]`; CI caught that an earlier local run predated the test files) |
 | Mobile ESLint (`expo lint`, incl. React Compiler rules) | **PASS** (0 problems) |
 | Mobile Jest (`jest --ci`) | **14 / 14 PASS** |
 | Browser end-to-end (Playwright, web build of the same app + demo backend) | **18 / 18 PASS** (run twice, after fixes) |
-| Android release APK build | see "APK" below |
+| Android release APK build | **PASS on GitHub Actions** (run #4); local build **BLOCKED** by Maven Central HTTP 429 — see "APK" below |
+| Backend Docker image build + smoke test | **PASS on GitHub Actions** (image built, started in demo mode, `/api/health` and `/api/quote` answered) |
+| GitHub Actions CI (all 4 jobs: backend, mobile, docker, android-apk) | **PASS** (run #4, commit `caafaa7`) |
 | On-device Android tests | **BLOCKED** — no emulator/device |
 | Live Dukascopy JForex connection | **BLOCKED** — no account credentials |
 | Real Dukascopy datafeed download (`-Dsurefire.groups=network`) | **BLOCKED** — provider returned HTTP 429; retries stopped to respect the limit |
@@ -60,7 +62,7 @@ environment (reason given) · **NOT TESTED** = not executed.
 | Chart performance | PARTIAL | 400-candle chart renders in < 3 s in headless Chromium; not measured on a phone |
 | Offline behaviour | PASS (unit) | cached-response fallback logic; journal mirror; not exercised on device |
 | Database persistence | PASS (backend) / NOT TESTED (device SQLite) | settings persistence verified across reload in web build (localStorage variant) |
-| APK installation and launch | BLOCKED | no device/emulator |
+| APK installation and launch | BLOCKED | no device/emulator; APK statically verified (see below) |
 
 ## Defects found by the tests and fixed
 
@@ -72,6 +74,28 @@ environment (reason given) · **NOT TESTED** = not executed.
 6. Chart overlays were cluttered (screenshot review) → markers/zones limited, label collision avoidance.
 7. Several React effects set state synchronously (lint) → restructured.
 
+8. Missing JForex credentials left a half-started backend → validated before startup, exit code 1; failed JForex logins now
+   report DISCONNECTED and retry instead of aborting.
+9. CI: the `setup-android` action's default `tools` package no longer exists → explicit package list.
+
 ## APK
 
-See section appended below after the build.
+**Local build (this environment): BLOCKED.** Four `./gradlew assembleRelease` attempts over ~18 hours failed while
+resolving dependencies because Maven Central answered HTTP 429 (Too Many Requests) to the environment's shared egress IP.
+Retries used reduced parallelism and Gradle's backoff; routing around the rate limit with a mirror was deliberately not
+done. The code itself never failed to compile.
+
+**GitHub Actions build: PASS.** Run #4 (`android-apk` job) built `app-release.apk` in ~8.5 min and uploaded artifact
+`aurum-xau-release-apk` (expires 2027-02-11). Static verification of the downloaded APK:
+
+| Check | Result |
+|---|---|
+| Package / version | `com.aurumxau.goldintel` 1.0.0 (versionCode 1), label "AURUM XAU" |
+| SDK levels | minSdk 24 (Android 7.0), targetSdk 36, compiled against 37 |
+| ABI | arm64-v8a |
+| JS bundle | `assets/index.android.bundle` present (Hermes, 2.8 MB) |
+| Signature | APK Signature Scheme v2 verified, 1 signer: `CN=Android Debug` (public Expo template debug key — fine for self-install; use EAS or your own key for distribution) |
+| Size / SHA-256 | 32.8 MB · `d5d98b6cda1a4a3cf9966e2d21e71cfb861c00e1a2a06bf0f7f17f9c02619073` |
+| Permissions | INTERNET, POST_NOTIFICATIONS, ACCESS_NETWORK_STATE, VIBRATE, WAKE_LOCK, RECEIVE_BOOT_COMPLETED, FCM receive, launcher-badge permissions (added by expo-notifications), USE_BIOMETRIC/USE_FINGERPRINT (declared by expo-secure-store; the app does not prompt for biometrics) |
+
+**Install and launch on a device: NOT TESTED** (no emulator/device available).

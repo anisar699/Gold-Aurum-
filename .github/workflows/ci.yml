@@ -26,6 +26,20 @@ jobs:
           name: aurum-backend-jar
           path: backend/target/aurum-backend.jar
 
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend Docker image
+        run: docker build -t aurum-backend:ci backend
+      - name: Smoke-test the image (demo mode)
+        run: |
+          docker run -d --name aurum -p 8080:8080 -e AURUM_DATA_MODE=demo -e AURUM_CALENDAR_PROVIDER=none \
+            -e AURUM_API_TOKEN=ci-token-0123456789abcdef aurum-backend:ci
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/api/health && break; sleep 2; done
+          curl -sf -H "Authorization: Bearer ci-token-0123456789abcdef" http://127.0.0.1:8080/api/quote
+          docker logs aurum | tail -20
+
   mobile:
     runs-on: ubuntu-latest
     defaults:

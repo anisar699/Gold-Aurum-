@@ -36,8 +36,16 @@ public final class Main {
 
     public static void main(String[] args) throws Exception {
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> log.error("Uncaught exception in {}", t.getName(), e));
-        AppConfig cfg = AppConfig.load();
-        App app = start(cfg, Clock.SYSTEM);
+        AppConfig cfg;
+        App app;
+        try {
+            cfg = AppConfig.load();
+            app = start(cfg, Clock.SYSTEM);
+        } catch (Exception e) {
+            log.error("Startup failed: {}", e.getMessage() == null ? e.toString() : e.getMessage(), e);
+            System.exit(1);
+            return;
+        }
         Runtime.getRuntime().addShutdownHook(new Thread(app::close, "shutdown"));
         log.info("AURUM XAU backend {} listening on {}:{} (mode {})", ApiServer.VERSION, cfg.bindHost, app.api().port(), cfg.dataMode);
         if (cfg.apiTokenGenerated) {
@@ -104,6 +112,9 @@ public final class Main {
             case DATAFEED -> new DatafeedProvider(new DatafeedClient(cfg.datafeedBaseUrl, cfg.datafeedUserAgent,
                     cfg.datafeedMinIntervalMs, cfg.dataDir.resolve("datafeed-cache"), DatafeedClient.httpTransport(), clock), clock);
             case JFOREX -> {
+                if (cfg.jforexUser.isBlank() || cfg.jforexPassword.isBlank()) {
+                    throw new IllegalStateException("AURUM_DATA_MODE=jforex requires AURUM_JFOREX_USER and AURUM_JFOREX_PASSWORD");
+                }
                 try {
                     Class<?> c = Class.forName("com.aurumxau.data.jforex.JForexProvider");
                     yield (MarketDataProvider) c.getConstructor(AppConfig.class, Clock.class).newInstance(cfg, clock);

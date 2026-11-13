@@ -114,7 +114,17 @@ public final class JForexProvider implements MarketDataProvider {
                 if (!closing) scheduleReconnect();
             }
         });
-        connect();
+        try {
+            connect();
+        } catch (Exception e) {
+            // Do not crash the backend: report DISCONNECTED (no live signals) and keep retrying.
+            lastError = "connect failed: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            lastErrorAt = clock.nowMs();
+            log.warn("JForex initial connect failed: {}", lastError);
+            listener.onConnectionChange(false, lastError);
+            if (e instanceof com.dukascopy.api.system.JFAuthenticationException) backoffMs = 300_000; // wrong login: retry slowly
+            scheduleReconnect();
+        }
     }
 
     private void connect() throws Exception {
